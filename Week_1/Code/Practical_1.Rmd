@@ -1,0 +1,160 @@
+---
+title: "Week_1_Practical"
+author: "Xianchen Wang"
+date: "2024-01-30"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r}
+library(sf)
+library(terra)
+library(raster)
+
+
+bare_earth <- st_read(here::here("Week_1/Data/Bare_earth_Polygon_Polygon.shp"))
+grass <- st_read(here::here("Week_1/Data/Grass_Polygon_Polygon.shp"))
+forest <- st_read(here::here("Week_1/Data/Forest_Polygon_Polygon.shp"))
+urban <- st_read(here::here("Week_1/Data/Low_urban_Polygon_Polygon.shp"))
+high_urban <- st_read(here::here("Week_1/Data/High_urban_Polygon_Polygon.shp"))
+
+
+#Landsat equivalent
+
+bands <- c("1", "2", "3", "4")
+
+sentinel <- rast(here::here("Week_1/Data/S2A_msk.tif"))
+
+names(sentinel) <- bands
+
+bands_1 <- c("1", "2", "3", "4", "5")
+  
+landsat<-rast(here::here("Week_1/Data/LSAT_msk.tif"))
+
+names(landsat) <- bands_1
+
+
+bare_earth <- vect(bare_earth)
+grass <- vect(grass)
+forest <- vect(forest)
+urban <- vect(urban)
+high_urban <- vect(high_urban)
+
+
+crs(landsat)
+crs(sentinel)
+
+# reproject landsat
+landsat <- project(landsat, sentinel)
+```
+
+
+```{r}
+library(tidyverse)
+
+band_fun <- function(sensor, landcover) {
+  col_sensor <- deparse(substitute(sensor))
+  col_land <- deparse(substitute(landcover))
+
+  sen_urban<- terra::extract(sensor, landcover, progress = F)%>%
+    as_tibble()%>%
+    pivot_longer(cols = 2:5, 
+               names_to="bands", 
+               values_to="band_values")%>%
+    add_column(sensor=col_sensor)%>%
+    add_column(land=col_land)
+                 
+}
+
+band_fun_all_values <- function(sensor, landcover) {
+  col_sensor <- deparse(substitute(sensor))
+  col_land <- deparse(substitute(landcover))
+
+  sen_urban<- terra::extract(sensor, landcover, progress = F)%>%
+    as_tibble()%>%
+    pivot_longer(cols = 2:5, 
+               names_to="bands", 
+               values_to="band_values")
+                 
+}
+```
+
+
+```{r}
+sen_urban<- band_fun(sentinel, urban)
+sen_bare <- band_fun(sentinel, bare_earth)
+sen_grass<- band_fun(sentinel, grass) 
+sen_forest<- band_fun(sentinel, forest) 
+sen_high_urban <- band_fun(sentinel, high_urban) 
+
+lsat_urban<- band_fun(landsat, urban)
+lsat_bare<- band_fun(landsat, bare_earth)
+lsat_grass<- band_fun(landsat, grass)
+lsat_forest<- band_fun(landsat, forest)
+lsat_high_urban <- band_fun(landsat, high_urban)
+```
+
+
+```{r}
+sen_lsat <- bind_rows(sen_urban, sen_bare, sen_grass,
+                      sen_forest, sen_high_urban,
+                      lsat_urban, lsat_bare, lsat_grass,
+                      lsat_forest, lsat_high_urban)
+
+means<- sen_lsat%>%
+  group_by(bands, sensor, land)%>%
+  summarise(Mean=mean(band_values), Std=sd(band_values))
+
+p1 <- means %>%
+  filter(sensor=="sentinel") %>%
+  ggplot(., aes(x = bands, y = Mean,
+                col=land))+
+  geom_point()+
+  geom_line(aes(group = land)) +
+  geom_errorbar(aes(ymin = (Mean-Std), ymax = (Mean+Std), width = 0.2))
+p1
+```
+
+
+```{r}
+p2 <- sen_lsat %>%
+  filter(sensor=="sentinel") %>%
+ggplot(., aes(x=band_values, group=land, fill=land)) + 
+  geom_density(alpha = 0.6)+
+#Add a mean vertical line
+  geom_vline(data = . %>% group_by(land) %>% summarise(group_mean = mean(band_values)),
+             aes(xintercept=group_mean, color = land), linetype="dashed", size=1)
+p2
+```
+
+
+```{r}
+library(cowplot)
+
+output<-plot_grid(p1, p2, labels = c('A', 'B'), label_size = 12, ncol=1)
+
+output
+```
+
+
+```{r}
+ggsave("spectral_reflectance.pdf", width = 20, height = 20, units = "cm")
+ggsave("spectral_reflectance.jpg", dpi = 150)
+
+t1<- sen_lsat %>%
+           filter(sensor=="sentinel" & land =="urban")%>%
+           select(band_values)%>%
+           pull()
+
+t2<- sen_lsat %>%
+           filter(sensor=="landsat" & land =="urban")%>%
+           select(band_values)%>%
+           pull()
+
+t.test(t1, t2)
+```
+
