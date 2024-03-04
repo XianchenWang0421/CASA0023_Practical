@@ -1,0 +1,137 @@
+---
+title: "Week_3_Practical_3"
+author: "Xianchen Wang"
+date: "2024-03-03"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r}
+library(terra)
+library(raster)
+library(RStoolbox)
+library(tidyverse)
+library(fs)
+library(rgdal)
+
+## Import meta-data and bands based on MTL file
+# MUST BE LEVEL 1 not LEVEL 2 - see more info later.
+mtlFile  <- ("Week_3/Data/LC08_L1TP_175083_20211106_20211117_02_T1/LC08_L1TP_175083_20211106_20211117_02_T1_MTL.txt")
+                        
+metaData <- readMeta(here::here(mtlFile))
+
+lsatMeta  <- stackMeta(metaData)
+
+# surface reflectance with DOS
+
+l8_boa_ref <- radCor(lsatMeta, metaData, method = "dos")
+
+#terra::writeRaster(l8_boa_ref, datatype="FLT4S", filename = "prac_3/Lsatdata8/l8_boa_ref.tif", format = "GTiff", overwrite=TRUE)
+
+# Radiance 
+
+lsat_rad <- radCor(lsatMeta, metaData = metaData, method = "rad")
+
+#terra::writeRaster(lsat_rad, datatype="FLT4S", filename = "prac_3/Lsatdata8/lsat_rad.tif", format = "GTiff", overwrite=TRUE)
+```
+
+
+```{r}
+hazeDN    <- RStoolbox::estimateHaze(lsatMeta, hazeBands = 2:4, darkProp = 0.01, plot = TRUE)
+
+lsat_sref <- radCor(lsatMeta, metaData = metaData, method = "dos", 
+                    hazeValues = hazeDN, hazeBands = 2:4)
+```
+
+```{r}
+library(tidyverse)
+library(terra)
+library(fs)
+
+# List your raster files excluding band 8 using the patter argument
+listlandsat_8<-dir_info(here::here("Week_3", "Data", "LC08_L2SP_175083_20220501_20220504_02_T1"))%>%
+  dplyr::filter(str_detect(path, "[B123456790].TIF")) %>%
+  dplyr::select(path)%>%
+  pull()%>%
+  as.character()%>%
+  # Load our raster layers into a stack
+  terra::rast()
+```
+
+
+```{r}
+m1 <- listlandsat_8
+
+m1_NDVI <- (m1$LC08_L2SP_175083_20220501_20220504_02_T1_SR_B5 - m1$LC08_L2SP_175083_20220501_20220504_02_T1_SR_B4 ) / (m1$LC08_L2SP_175083_20220501_20220504_02_T1_SR_B5 + m1$LC08_L2SP_175083_20220501_20220504_02_T1_SR_B4)
+
+png("NDVI.png", width = 800, height = 600)
+
+m1_NDVI %>%
+  plot(.)
+
+dev.off()
+```
+
+
+```{r}
+veg <- m1_NDVI %>%
+  # cbind = combine dataframes, or here or values listed
+  terra::classify(., cbind(-Inf, 0.2, NA))
+
+png("veg.png", width = 800, height = 600)
+
+veg %>%
+  plot(.)
+
+dev.off()
+```
+
+
+```{r}
+library(GLCMTextures)
+
+scale <-(m1*0.0000275) + -0.2
+
+textures1<- glcm_textures(
+  scale$LC08_L2SP_175083_20220501_20220504_02_T1_SR_B4,
+  # size of window
+  w = c(7,7),
+  # levels means divide the data into 4 "bins" e.g. a range of 0-20
+  # would be 0-5, 5-10, 10-15,15-20
+  n_levels = 4,
+  # raster data might not be grater than 0
+  # convert it to a discrete number of grey levels (e.g. 4)
+  quantization = "equal range",
+  #co-occurence (second order) matrix (1,0) = one pixel to the right
+  # default is all directions as below
+  shift = list(c(1, 0), c(1, 1), c(0, 1), c(-1, 1)),
+  # select what we want
+  metrics="glcm_homogeneity") 
+
+plot(textures1)
+```
+
+
+```{r}
+pca <- prcomp(as.data.frame(m1, na.rm=TRUE), 
+              center=TRUE, 
+              scale=TRUE)
+
+summary(pca)
+```
+
+
+```{r}
+x <- predict(m1, pca)
+
+png("pca.png", width = 800, height = 600)
+
+plot(x)
+
+dev.off()
+```
+
